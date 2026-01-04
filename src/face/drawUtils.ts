@@ -3,7 +3,7 @@ export function highlightPoints(
   points: Array<{ x: number; y: number }>,
   canvasWidth: number,
   canvasHeight: number,
-  options?: { color?: string; radius?: number }
+  options?: { color?: string; radius?: number },
 ) {
   const { color = "red", radius = 4 } = options ?? {};
   ctx.fillStyle = color;
@@ -14,4 +14,3 @@ export function highlightPoints(
     ctx.fill();
   }
 }
-

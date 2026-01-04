@@ -3,12 +3,11 @@ import type { FaceLandmarker } from "@mediapipe/tasks-vision";
 import "./App.css";
 import { createFaceLandmarker } from "./face/createFaceLandmarker";
 import { computeSignals, type Signals } from "./face/computeSignals";
-// use these for debugging to highlight specific landmarks when adding new signals 
+// use these for debugging to highlight specific landmarks when adding new signals
 // import { FACE_LM } from "./face/indices";
 // import { highlightPoints } from "./face/drawUtils";
 
 const CALIBRATION_DURATION = 10000; // 10 seconds
-
 
 function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -21,17 +20,17 @@ function App() {
   const lastSampleTimeRef = useRef<number>(0);
   const isCalibrationRef = useRef<boolean>(false);
 
-
   const [status, setStatus] = useState("Initializing…");
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
-  const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState<number>(10);
+  const [calibrationSecondsLeft, setCalibrationSecondsLeft] =
+    useState<number>(10);
   const [neutral, setNeutral] = useState<Signals | null>(null);
+  const [hasCalibrated, setHasCalibrated] = useState<boolean>(false);
 
   // TODO: Use the calibrated neutral values to compute a live tension score and trigger alerts when above threshold
 
-  const [eyeOpenAvg, setEyeOpenAvg] = useState<number | null>(null)
+  const [eyeOpenAvg, setEyeOpenAvg] = useState<number | null>(null);
   const [browInnerDist, setBrowInnerDist] = useState<number | null>(null);
-
 
   const lastUiUpdateRef = useRef<number>(0);
 
@@ -39,14 +38,13 @@ function App() {
     // reset everything for a fresh run
     samplesRef.current = [];
     lastSampleTimeRef.current = 0;
-  
+
     setNeutral(null);
     setIsCalibrating(true);
     isCalibrationRef.current = true;
-  
+
     calibrationEndTimeRef.current = performance.now() + CALIBRATION_DURATION;
   }
-  
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -63,7 +61,6 @@ function App() {
 
         if (cancelled) return;
 
-        
         if (!videoEl) throw new Error("Video element not found");
 
         videoEl.srcObject = stream;
@@ -130,11 +127,9 @@ function App() {
           // Clear previous frame
           context.clearRect(0, 0, canvas.width, canvas.height);
 
-          // Optional: set draw style each frame
           context.fillStyle = "lime";
 
           const result = landmarker.detectForVideo(video, performance.now());
-
 
           const faceLandmarks = result.faceLandmarks?.[0];
           if (faceLandmarks) {
@@ -147,7 +142,12 @@ function App() {
               if (now - lastSampleTimeRef.current >= 100) {
                 samplesRef.current.push(signals);
                 lastSampleTimeRef.current = now;
-                setCalibrationSecondsLeft(Math.max(0, Math.ceil((calibrationEndTimeRef.current! - now) / 1000)));
+                setCalibrationSecondsLeft(
+                  Math.max(
+                    0,
+                    Math.ceil((calibrationEndTimeRef.current! - now) / 1000),
+                  ),
+                );
               }
             }
 
@@ -161,22 +161,24 @@ function App() {
               isCalibrationRef.current = false;
               setIsCalibrating(false);
               calibrationEndTimeRef.current = null;
-            
+
               // compute neutral from samples
               const samples = samplesRef.current;
               if (samples.length > 0) {
                 const eyeMean =
-                  samples.reduce((sum, s) => sum + s.eyeOpenAvg, 0) / samples.length;
+                  samples.reduce((sum, s) => sum + s.eyeOpenAvg, 0) /
+                  samples.length;
                 const browMean =
-                  samples.reduce((sum, s) => sum + s.browInnerDist, 0) / samples.length;
-            
+                  samples.reduce((sum, s) => sum + s.browInnerDist, 0) /
+                  samples.length;
+
                 setNeutral({ eyeOpenAvg: eyeMean, browInnerDist: browMean });
+                setHasCalibrated(true);
               }
-            
+
               // clear samples
               samplesRef.current = [];
             }
-            
 
             // UI throttling to avoid excessive re-renders
             if (signals && now - lastUiUpdateRef.current > 100) {
@@ -193,7 +195,7 @@ function App() {
       } catch (err) {
         console.error(err);
         setStatus(
-          err instanceof Error ? `Error: ${err.message}` : "Error starting"
+          err instanceof Error ? `Error: ${err.message}` : "Error starting",
         );
       }
     }
@@ -217,20 +219,15 @@ function App() {
     <div style={{ padding: 16 }}>
       <h1>Face Tension Monitor</h1>
       <p>{status}</p>
+      <p>Eye openness: {eyeOpenAvg ? eyeOpenAvg.toFixed(4) : "—"}</p>
       <p>
-  Eye openness: {eyeOpenAvg ? eyeOpenAvg.toFixed(4) : "—"}
-</p>
-<p>
-  Brow inner distance: {browInnerDist ? browInnerDist.toFixed(4) : "—"}
-</p>
-<button onClick={startCalibration} disabled={isCalibrating}>
-  {isCalibrating
-    ? `Calibrating… ${calibrationSecondsLeft ?? ""}`
-    : "Calibrate (10s)"}
-</button>
-
-
-
+        Brow inner distance: {browInnerDist ? browInnerDist.toFixed(4) : "—"}
+      </p>
+      <button onClick={startCalibration} disabled={isCalibrating}>
+        {isCalibrating
+          ? `Calibrating… ${calibrationSecondsLeft ?? ""}`
+          : "Calibrate (10s)"}
+      </button>
 
       <div style={{ position: "relative", width: 640 }}>
         <video
@@ -241,7 +238,7 @@ function App() {
           muted
           style={{
             display: "block",
-            transform: "scaleX(-1)", // mirror 
+            transform: "scaleX(-1)", // mirror
           }}
         />
         <canvas
