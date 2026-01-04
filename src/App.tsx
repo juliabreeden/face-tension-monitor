@@ -8,6 +8,7 @@ import { computeSignals, type Signals } from "./face/computeSignals";
 // import { highlightPoints } from "./face/drawUtils";
 
 const CALIBRATION_DURATION = 10000; // 10 seconds
+const TENSION_ALERT_THRESHOLD_MS = 3000; // 3 seconds
 
 function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -24,8 +25,9 @@ function App() {
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
   const [calibrationSecondsLeft, setCalibrationSecondsLeft] =
     useState<number>(10);
-  const [neutral, setNeutral] = useState<Signals | null>(null);
-  const [hasCalibrated, setHasCalibrated] = useState<boolean>(false);
+  const neutralRef = useRef<Signals | null>(null);
+  const hasCalibratedRef = useRef<boolean>(false);
+  const tensionStartTimeRef = useRef<number | null>(null);
 
   // TODO: Use the calibrated neutral values to compute a live tension score and trigger alerts when above threshold
 
@@ -34,12 +36,56 @@ function App() {
 
   const lastUiUpdateRef = useRef<number>(0);
 
+  // Request notification permission on mount
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // console.log("Notification.permission", Notification.permission);
+
+  const [isPip, setIsPip] = useState(false);
+
+  async function togglePictureInPicture() {
+    const video = videoRef.current;
+    if (!video) return;
+
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.error("PiP error:", err);
+    }
+  }
+
+  // Track PiP state changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const onEnterPip = () => setIsPip(true);
+    const onLeavePip = () => setIsPip(false);
+
+    video.addEventListener("enterpictureinpicture", onEnterPip);
+    video.addEventListener("leavepictureinpicture", onLeavePip);
+
+    return () => {
+      video.removeEventListener("enterpictureinpicture", onEnterPip);
+      video.removeEventListener("leavepictureinpicture", onLeavePip);
+    };
+  }, []);
+
   function startCalibration() {
     // reset everything for a fresh run
     samplesRef.current = [];
     lastSampleTimeRef.current = 0;
 
-    setNeutral(null);
+    neutralRef.current = null;
+    hasCalibratedRef.current = false;
     setIsCalibrating(true);
     isCalibrationRef.current = true;
 
@@ -172,8 +218,8 @@ function App() {
                   samples.reduce((sum, s) => sum + s.browInnerDist, 0) /
                   samples.length;
 
-                setNeutral({ eyeOpenAvg: eyeMean, browInnerDist: browMean });
-                setHasCalibrated(true);
+                neutralRef.current = { eyeOpenAvg: eyeMean, browInnerDist: browMean };
+                hasCalibratedRef.current = true;
               }
 
               // clear samples
@@ -185,6 +231,60 @@ function App() {
               setEyeOpenAvg(signals.eyeOpenAvg);
               setBrowInnerDist(signals.browInnerDist);
               lastUiUpdateRef.current = now;
+            }
+
+            if (hasCalibratedRef.current && neutralRef.current && signals) {
+              const isTense =
+                signals.eyeOpenAvg < neutralRef.current.eyeOpenAvg * 0.9 ||
+                signals.browInnerDist < neutralRef.current.browInnerDist * 0.9;
+              
+              if (isTense) {
+                console.log("inside if isTense")
+                if (tensionStartTimeRef.current === null) {
+                  tensionStartTimeRef.current = now; // start tracking
+                } else if (now - tensionStartTimeRef.current >= TENSION_ALERT_THRESHOLD_MS) {
+                  // Tension sustained for threshold duration - trigger notification!
+                  if (Notification.permission === "granted") {
+                    console.log("attempting to send notification")
+                    try {
+                      const notification = new Notification("Face Tension Monitor", {
+                        body: "Tension detected! Relax your face :)",
+                        icon: "/favicon.ico",
+                        requireInteraction: true, // Keep notification visible until dismissed
+                      });
+                      console.log("Notification created:", notification);
+                    } catch (error) {
+                      console.error("Error sending notification", error);
+                    }
+                  }
+                  // Play a relaxing chime sound
+                  const audioCtx = new AudioContext();
+                  const playTone = (freq: number, startTime: number, duration: number) => {
+                    const oscillator = audioCtx.createOscillator();
+                    const gainNode = audioCtx.createGain();
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+                    oscillator.type = "sine";
+                    oscillator.frequency.value = freq;
+                    // Gentle fade in and out
+                    gainNode.gain.setValueAtTime(0, startTime);
+                    gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+                    oscillator.start(startTime);
+                    oscillator.stop(startTime + duration);
+                  };
+                  // Play a pleasant chord: C5, E5, G5 (major chord)
+                  const now = audioCtx.currentTime;
+                  playTone(523.25, now, 1.5);        // C5
+                  playTone(659.25, now + 0.1, 1.4);  // E5
+                  playTone(783.99, now + 0.2, 1.3);  // G5
+                  // Reset timer to avoid spamming notifications
+                  tensionStartTimeRef.current = null;
+                }
+                // not sure about this 
+              } else {
+                tensionStartTimeRef.current = null; // reset timer when relaxed
+              }
             }
           }
 
@@ -228,8 +328,12 @@ function App() {
           ? `Calibrating… ${calibrationSecondsLeft ?? ""}`
           : "Calibrate (10s)"}
       </button>
+      {" "}
+      <button onClick={togglePictureInPicture}>
+        {isPip ? "Exit Picture-in-Picture" : "Enable Picture-in-Picture"}
+      </button>
 
-      <div style={{ position: "relative", width: 640 }}>
+      <div style={{ position: "relative", width: 640, display: isPip ? "none" : "block" }}>
         <video
           ref={videoRef}
           width={640}
@@ -238,7 +342,7 @@ function App() {
           muted
           style={{
             display: "block",
-            transform: "scaleX(-1)", // mirror
+            transform: isPip ? "none" : "scaleX(-1)", // mirror only when not in PiP
           }}
         />
         <canvas
@@ -248,7 +352,7 @@ function App() {
             left: 0,
             top: 0,
             pointerEvents: "none",
-            transform: "scaleX(-1)", // mirror the overlay too
+            transform: isPip ? "none" : "scaleX(-1)", // mirror only when not in PiP
           }}
         />
       </div>
