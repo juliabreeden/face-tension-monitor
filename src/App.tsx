@@ -49,6 +49,7 @@ function App() {
   
 
   useEffect(() => {
+    const videoEl = videoRef.current;
     let cancelled = false;
 
     async function start() {
@@ -62,7 +63,7 @@ function App() {
 
         if (cancelled) return;
 
-        const videoEl = videoRef.current;
+        
         if (!videoEl) throw new Error("Video element not found");
 
         videoEl.srcObject = stream;
@@ -205,7 +206,6 @@ function App() {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
 
       // Stop camera stream
-      const videoEl = videoRef.current;
       const stream = videoEl?.srcObject;
       if (stream instanceof MediaStream) {
         for (const track of stream.getTracks()) track.stop();
