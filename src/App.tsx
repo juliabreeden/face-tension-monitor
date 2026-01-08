@@ -1,40 +1,51 @@
 import { useEffect, useRef, useState } from "react";
-import type { FaceLandmarker } from "@mediapipe/tasks-vision";
-import "./App.css";
-import { createFaceLandmarker } from "./face/createFaceLandmarker";
+import { useCamera } from "./hooks/useCamera";
+import { useFaceLandmarker } from "./hooks/useFaceLandmarker";
 import { computeSignals, type Signals } from "./face/computeSignals";
-// use these for debugging to highlight specific landmarks when adding new signals
-// import { FACE_LM } from "./face/indices";
-// import { highlightPoints } from "./face/drawUtils";
+import { playRelaxChime } from "./utils/audio";
 
-const CALIBRATION_DURATION = 10000; // 10 seconds
-const TENSION_ALERT_THRESHOLD_MS = 3000; // 3 seconds
+// Configuration constants
+const CALIBRATION_DURATION_MS = 10_000;
+const TENSION_ALERT_THRESHOLD_MS = 3_000;
+const TENSION_THRESHOLD = 0.9; // 90% of neutral = tense
+const SAMPLE_INTERVAL_MS = 100;
+const UI_UPDATE_INTERVAL_MS = 100;
 
 function App() {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Custom hooks for camera and face detection
+  const { videoRef, status: cameraStatus, error: cameraError } = useCamera();
+  const {
+    landmarkerRef,
+    status: landmarkerStatus,
+    error: landmarkerError,
+  } = useFaceLandmarker();
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
-  const samplesRef = useRef<Signals[]>([]);
+  // Calibration state (both state for UI and ref for animation loop)
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const isCalibrationRef = useRef(false);
   const calibrationEndTimeRef = useRef<number | null>(null);
-  const lastSampleTimeRef = useRef<number>(0);
-  const isCalibrationRef = useRef<boolean>(false);
+  const samplesRef = useRef<Signals[]>([]);
+  const lastSampleTimeRef = useRef(0);
+  const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState(10);
 
-  const [status, setStatus] = useState("Initializing…");
-  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
-  const [calibrationSecondsLeft, setCalibrationSecondsLeft] =
-    useState<number>(10);
+  // Neutral baseline from calibration
   const neutralRef = useRef<Signals | null>(null);
-  const hasCalibratedRef = useRef<boolean>(false);
+  const hasCalibratedRef = useRef(false);
+
+  // Tension tracking
   const tensionStartTimeRef = useRef<number | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // TODO: Use the calibrated neutral values to compute a live tension score and trigger alerts when above threshold
-
+  // Live signals for UI display
   const [eyeOpenAvg, setEyeOpenAvg] = useState<number | null>(null);
   const [browInnerDist, setBrowInnerDist] = useState<number | null>(null);
+  const lastUiUpdateRef = useRef(0);
 
-  const lastUiUpdateRef = useRef<number>(0);
+  // Picture-in-Picture state
+  const [isPip, setIsPip] = useState(false);
 
   // Request notification permission on mount
   useEffect(() => {
@@ -42,25 +53,6 @@ function App() {
       Notification.requestPermission();
     }
   }, []);
-
-  // console.log("Notification.permission", Notification.permission);
-
-  const [isPip, setIsPip] = useState(false);
-
-  async function togglePictureInPicture() {
-    const video = videoRef.current;
-    if (!video) return;
-
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else {
-        await video.requestPictureInPicture();
-      }
-    } catch (err) {
-      console.error("PiP error:", err);
-    }
-  }
 
   // Track PiP state changes
   useEffect(() => {
@@ -77,283 +69,252 @@ function App() {
       video.removeEventListener("enterpictureinpicture", onEnterPip);
       video.removeEventListener("leavepictureinpicture", onLeavePip);
     };
-  }, []);
+  }, [videoRef]);
 
-  function startCalibration() {
-    // reset everything for a fresh run
-    samplesRef.current = [];
-    lastSampleTimeRef.current = 0;
-
-    neutralRef.current = null;
-    hasCalibratedRef.current = false;
-    setIsCalibrating(true);
-    isCalibrationRef.current = true;
-
-    calibrationEndTimeRef.current = performance.now() + CALIBRATION_DURATION;
-  }
-
+  // Main detection loop
   useEffect(() => {
-    const videoEl = videoRef.current;
+    if (cameraStatus !== "ready") return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Match canvas size to video
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    // Capture narrowed types for use in closures
+    const canvasEl = canvas;
+    const context = ctx;
+    const videoEl = video;
+
     let cancelled = false;
 
-    async function start() {
-      try {
-        setStatus("Requesting camera…");
+    function drawLandmarks(
+      landmarks: Array<{ x: number; y: number }>,
+      width: number,
+      height: number,
+    ) {
+      context.fillStyle = "lime";
+      for (const pt of landmarks) {
+        const x = pt.x * width;
+        const y = pt.y * height;
+        context.beginPath();
+        context.arc(x, y, 1, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 },
-          audio: false,
-        });
-
-        if (cancelled) return;
-
-        if (!videoEl) throw new Error("Video element not found");
-
-        videoEl.srcObject = stream;
-
-        // Wait until the video has enough data to play
-        await new Promise<void>((resolve) => {
-          const onLoaded = () => {
-            videoEl.removeEventListener("loadeddata", onLoaded);
-            resolve();
-          };
-          videoEl.addEventListener("loadeddata", onLoaded);
-        });
-
-        if (cancelled) return;
-
-        // Make sure video is actually playing
-        await videoEl.play();
-
-        if (cancelled) return;
-
-        setStatus("Loading Face Landmarker…");
-        faceLandmarkerRef.current = await createFaceLandmarker();
-
-        if (cancelled) return;
-
-        setStatus("Tracking");
-
-        const canvasEl = canvasRef.current;
-        if (!canvasEl) throw new Error("Canvas element not found");
-
-        const ctx = canvasEl.getContext("2d");
-        if (!ctx) throw new Error("Could not get canvas 2D context");
-
-        // Match canvas size to the actual video size
-        canvasEl.width = videoEl.videoWidth;
-        canvasEl.height = videoEl.videoHeight;
-
-        // Capture narrowed types for use in closures
-        const canvas = canvasEl;
-        const context = ctx;
-        const video = videoEl;
-
-        function drawLandmarks(landmarks: Array<{ x: number; y: number }>) {
-          // Draw as small circles
-          for (const pt of landmarks) {
-            const x = pt.x * canvas.width;
-            const y = pt.y * canvas.height;
-
-            context.beginPath();
-            context.arc(x, y, 1, 0, Math.PI * 2);
-            context.fill();
-          }
-        }
-
-        function loop() {
-          if (cancelled) return;
-
-          const landmarker = faceLandmarkerRef.current;
-          if (!landmarker) {
-            rafIdRef.current = requestAnimationFrame(loop);
-            return;
-          }
-
-          // Clear previous frame
-          context.clearRect(0, 0, canvas.width, canvas.height);
-
-          context.fillStyle = "lime";
-
-          const result = landmarker.detectForVideo(video, performance.now());
-
-          const faceLandmarks = result.faceLandmarks?.[0];
-          if (faceLandmarks) {
-            drawLandmarks(faceLandmarks);
-            const signals = computeSignals(faceLandmarks);
-            const now = performance.now();
-
-            // Calibration sampling
-            if (isCalibrationRef.current && signals) {
-              if (now - lastSampleTimeRef.current >= 100) {
-                samplesRef.current.push(signals);
-                lastSampleTimeRef.current = now;
-                setCalibrationSecondsLeft(
-                  Math.max(
-                    0,
-                    Math.ceil((calibrationEndTimeRef.current! - now) / 1000),
-                  ),
-                );
-              }
-            }
-
-            // End calibration if time is up
-            if (
-              isCalibrationRef.current &&
-              calibrationEndTimeRef.current !== null &&
-              now >= calibrationEndTimeRef.current
-            ) {
-              // stop calibrating
-              isCalibrationRef.current = false;
-              setIsCalibrating(false);
-              calibrationEndTimeRef.current = null;
-
-              // compute neutral from samples
-              const samples = samplesRef.current;
-              if (samples.length > 0) {
-                const eyeMean =
-                  samples.reduce((sum, s) => sum + s.eyeOpenAvg, 0) /
-                  samples.length;
-                const browMean =
-                  samples.reduce((sum, s) => sum + s.browInnerDist, 0) /
-                  samples.length;
-
-                neutralRef.current = { eyeOpenAvg: eyeMean, browInnerDist: browMean };
-                hasCalibratedRef.current = true;
-              }
-
-              // clear samples
-              samplesRef.current = [];
-            }
-
-            // UI throttling to avoid excessive re-renders
-            if (signals && now - lastUiUpdateRef.current > 100) {
-              setEyeOpenAvg(signals.eyeOpenAvg);
-              setBrowInnerDist(signals.browInnerDist);
-              lastUiUpdateRef.current = now;
-            }
-
-            if (hasCalibratedRef.current && neutralRef.current && signals) {
-              const isTense =
-                signals.eyeOpenAvg < neutralRef.current.eyeOpenAvg * 0.9 ||
-                signals.browInnerDist < neutralRef.current.browInnerDist * 0.9;
-              
-              if (isTense) {
-                console.log("inside if isTense")
-                if (tensionStartTimeRef.current === null) {
-                  tensionStartTimeRef.current = now; // start tracking
-                } else if (now - tensionStartTimeRef.current >= TENSION_ALERT_THRESHOLD_MS) {
-                  // Tension sustained for threshold duration - trigger notification!
-                  if (Notification.permission === "granted") {
-                    console.log("attempting to send notification")
-                    try {
-                      const notification = new Notification("Face Tension Monitor", {
-                        body: "Tension detected! Relax your face :)",
-                        icon: "/favicon.ico",
-                        requireInteraction: true, // Keep notification visible until dismissed
-                      });
-                      console.log("Notification created:", notification);
-                    } catch (error) {
-                      console.error("Error sending notification", error);
-                    }
-                  }
-                  // Play a relaxing chime sound
-                  const audioCtx = new AudioContext();
-                  const playTone = (freq: number, startTime: number, duration: number) => {
-                    const oscillator = audioCtx.createOscillator();
-                    const gainNode = audioCtx.createGain();
-                    oscillator.connect(gainNode);
-                    gainNode.connect(audioCtx.destination);
-                    oscillator.type = "sine";
-                    oscillator.frequency.value = freq;
-                    // Gentle fade in and out
-                    gainNode.gain.setValueAtTime(0, startTime);
-                    gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
-                    gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
-                    oscillator.start(startTime);
-                    oscillator.stop(startTime + duration);
-                  };
-                  // Play a pleasant chord: C5, E5, G5 (major chord)
-                  const now = audioCtx.currentTime;
-                  playTone(523.25, now, 1.5);        // C5
-                  playTone(659.25, now + 0.1, 1.4);  // E5
-                  playTone(783.99, now + 0.2, 1.3);  // G5
-                  // Reset timer to avoid spamming notifications
-                  tensionStartTimeRef.current = null;
-                }
-                // not sure about this 
-              } else {
-                tensionStartTimeRef.current = null; // reset timer when relaxed
-              }
-            }
-          }
-
-          rafIdRef.current = requestAnimationFrame(loop);
-        }
-
-        rafIdRef.current = requestAnimationFrame(loop);
-      } catch (err) {
-        console.error(err);
-        setStatus(
-          err instanceof Error ? `Error: ${err.message}` : "Error starting",
+    function handleCalibrationSample(signals: Signals, now: number) {
+      if (now - lastSampleTimeRef.current >= SAMPLE_INTERVAL_MS) {
+        samplesRef.current.push(signals);
+        lastSampleTimeRef.current = now;
+        setCalibrationSecondsLeft(
+          Math.max(0, Math.ceil((calibrationEndTimeRef.current! - now) / 1000)),
         );
       }
     }
 
-    start();
+    function finalizeCalibration() {
+      isCalibrationRef.current = false;
+      setIsCalibrating(false);
+      calibrationEndTimeRef.current = null;
+
+      const samples = samplesRef.current;
+      if (samples.length > 0) {
+        const eyeMean =
+          samples.reduce((sum, s) => sum + s.eyeOpenAvg, 0) / samples.length;
+        const browMean =
+          samples.reduce((sum, s) => sum + s.browInnerDist, 0) / samples.length;
+
+        neutralRef.current = { eyeOpenAvg: eyeMean, browInnerDist: browMean };
+        hasCalibratedRef.current = true;
+      }
+
+      samplesRef.current = [];
+    }
+
+    function checkTension(signals: Signals, now: number) {
+      const neutral = neutralRef.current;
+      if (!neutral) return;
+
+      const isTense =
+        signals.eyeOpenAvg < neutral.eyeOpenAvg * TENSION_THRESHOLD ||
+        signals.browInnerDist < neutral.browInnerDist * TENSION_THRESHOLD;
+
+      if (isTense) {
+        if (tensionStartTimeRef.current === null) {
+          tensionStartTimeRef.current = now;
+        } else if (
+          now - tensionStartTimeRef.current >=
+          TENSION_ALERT_THRESHOLD_MS
+        ) {
+          triggerTensionAlert();
+          tensionStartTimeRef.current = null;
+        }
+      } else {
+        tensionStartTimeRef.current = null;
+      }
+    }
+
+    function triggerTensionAlert() {
+      // Send notification
+      if (Notification.permission === "granted") {
+        new Notification("Face Tension Monitor", {
+          body: "Tension detected! Relax your face :)",
+          icon: "/favicon.ico",
+          requireInteraction: true,
+        });
+      }
+
+      // Play chime sound
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioContext();
+      }
+      playRelaxChime(audioCtxRef.current);
+    }
+
+    function loop() {
+      if (cancelled) return;
+
+      const landmarker = landmarkerRef.current;
+      if (!landmarker) {
+        rafIdRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      context.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+      const result = landmarker.detectForVideo(videoEl, performance.now());
+      const faceLandmarks = result.faceLandmarks?.[0];
+
+      if (faceLandmarks) {
+        drawLandmarks(faceLandmarks, canvasEl.width, canvasEl.height);
+
+        const signals = computeSignals(faceLandmarks);
+        const now = performance.now();
+
+        if (signals) {
+          // Handle calibration
+          if (isCalibrationRef.current) {
+            handleCalibrationSample(signals, now);
+
+            if (
+              calibrationEndTimeRef.current !== null &&
+              now >= calibrationEndTimeRef.current
+            ) {
+              finalizeCalibration();
+            }
+          }
+
+          // Update UI (throttled)
+          if (now - lastUiUpdateRef.current > UI_UPDATE_INTERVAL_MS) {
+            setEyeOpenAvg(signals.eyeOpenAvg);
+            setBrowInnerDist(signals.browInnerDist);
+            lastUiUpdateRef.current = now;
+          }
+
+          // Check for tension after calibration
+          if (hasCalibratedRef.current) {
+            checkTension(signals, now);
+          }
+        }
+      }
+
+      rafIdRef.current = requestAnimationFrame(loop);
+    }
+
+    rafIdRef.current = requestAnimationFrame(loop);
 
     return () => {
       cancelled = true;
-
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
-
-      // Stop camera stream
-      const stream = videoEl?.srcObject;
-      if (stream instanceof MediaStream) {
-        for (const track of stream.getTracks()) track.stop();
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
       }
     };
-  }, []);
+  }, [cameraStatus, videoRef, landmarkerRef]);
+
+  function startCalibration() {
+    samplesRef.current = [];
+    lastSampleTimeRef.current = 0;
+    neutralRef.current = null;
+    hasCalibratedRef.current = false;
+
+    setIsCalibrating(true);
+    isCalibrationRef.current = true;
+    calibrationEndTimeRef.current = performance.now() + CALIBRATION_DURATION_MS;
+  }
+
+  async function togglePictureInPicture() {
+    const video = videoRef.current;
+    if (!video) return;
+
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.error("PiP error:", err);
+    }
+  }
+
+  // Derive status message from hook states
+  function getStatusMessage(): string {
+    if (cameraError) return `Error: ${cameraError}`;
+    if (landmarkerError) return `Error: ${landmarkerError}`;
+    if (cameraStatus === "requesting") return "Requesting camera…";
+    if (landmarkerStatus === "loading") return "Loading Face Landmarker…";
+    if (cameraStatus === "ready" && landmarkerStatus === "ready")
+      return "Tracking";
+    return "Initializing…";
+  }
 
   return (
-    <div style={{ padding: 16 }}>
-      <h1>Face Tension Monitor</h1>
-      <p>{status}</p>
-      <p>Eye openness: {eyeOpenAvg ? eyeOpenAvg.toFixed(4) : "—"}</p>
-      <p>
-        Brow inner distance: {browInnerDist ? browInnerDist.toFixed(4) : "—"}
-      </p>
-      <button onClick={startCalibration} disabled={isCalibrating}>
-        {isCalibrating
-          ? `Calibrating… ${calibrationSecondsLeft ?? ""}`
-          : "Calibrate (10s)"}
-      </button>
-      {" "}
-      <button onClick={togglePictureInPicture}>
-        {isPip ? "Exit Picture-in-Picture" : "Enable Picture-in-Picture"}
-      </button>
+    <div className="flex flex-col items-center p-4 pt-16">
+      <h1 className="text-3xl font-bold mb-2">Face Tension Monitor</h1>
 
-      <div style={{ position: "relative", width: 640, display: isPip ? "none" : "block" }}>
+      <p className="text-gray-400 mb-4">{getStatusMessage()}</p>
+
+      <div className="mb-4 text-sm">
+        <p>Eye openness: {eyeOpenAvg?.toFixed(4) ?? "—"}</p>
+        <p>Brow inner distance: {browInnerDist?.toFixed(4) ?? "—"}</p>
+      </div>
+
+      <div className="flex justify-center gap-2 mb-4">
+        <button
+          onClick={startCalibration}
+          disabled={isCalibrating}
+          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {isCalibrating
+            ? `Calibrating… ${calibrationSecondsLeft}`
+            : "Calibrate (10s)"}
+        </button>
+        <button
+          onClick={togglePictureInPicture}
+          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
+        >
+          {isPip ? "Exit Picture-in-Picture" : "Enable Picture-in-Picture"}
+        </button>
+      </div>
+
+      <div className={`relative w-[640px] ${isPip ? "hidden" : "block"}`}>
         <video
           ref={videoRef}
           width={640}
           height={480}
           playsInline
           muted
-          style={{
-            display: "block",
-            transform: isPip ? "none" : "scaleX(-1)", // mirror only when not in PiP
-          }}
+          className={`block ${isPip ? "" : "-scale-x-100"}`}
         />
         <canvas
           ref={canvasRef}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            pointerEvents: "none",
-            transform: isPip ? "none" : "scaleX(-1)", // mirror only when not in PiP
-          }}
+          className={`absolute left-0 top-0 pointer-events-none ${isPip ? "" : "-scale-x-100"}`}
         />
       </div>
     </div>
