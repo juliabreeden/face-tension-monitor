@@ -38,6 +38,7 @@ function App() {
   // Tension tracking
   const tensionStartTimeRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const [isAlertDisabled, setIsAlertDisabled] = useState(false);
 
   // Live signals for UI display
   const [eyeOpenAvg, setEyeOpenAvg] = useState<number | null>(null);
@@ -152,7 +153,9 @@ function App() {
           now - tensionStartTimeRef.current >=
           TENSION_ALERT_THRESHOLD_MS
         ) {
-          triggerTensionAlert();
+          if (!isAlertDisabled) {
+            triggerTensionAlert();
+          }
           tensionStartTimeRef.current = null;
         }
       } else {
@@ -235,7 +238,7 @@ function App() {
         cancelAnimationFrame(rafIdRef.current);
       }
     };
-  }, [cameraStatus, videoRef, landmarkerRef]);
+  }, [cameraStatus, videoRef, landmarkerRef, isAlertDisabled]);
 
   function startCalibration() {
     samplesRef.current = [];
@@ -300,6 +303,14 @@ function App() {
           className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
         >
           {isPip ? "Exit Picture-in-Picture" : "Enable Picture-in-Picture"}
+        </button>
+      </div>
+      <div className="flex justify-center gap-2 mb-4">
+        <button
+          onClick={() => setIsAlertDisabled(!isAlertDisabled)}
+          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
+        >
+          {isAlertDisabled ? "Enable Alerts" : "Disable Alerts"}
         </button>
       </div>
 
