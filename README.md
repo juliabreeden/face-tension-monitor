@@ -1,73 +1,31 @@
-# React + TypeScript + Vite
+# Facial Tension Detector
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A work-in-progress web app exploring whether real-time awareness of facial tension can help reduce migraine frequency. 
 
-Currently, two official plugins are available:
+This is a personal tool and a learning project, and I’m documenting the build as it evolves.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## What it does (right now)
 
-## React Compiler
+- Tracks facial landmarks locally in the browser  
+- Computes some basic tension signals that are migraine triggers for me  
+- Calibrates a personal neutral baseline  
+- Plays a chime and fires a browser alert when sustained tension is detected  
+  (currently buggy and prone to false positives like smiling, and only tested on Google Chrome and Safari)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## What it’s moving toward
 
-## Expanding the ESLint configuration
+- Smarter alerting that’s helpful, not annoying  
+- Configurable thresholds for duration and intensity  
+- Better handling of movement and normal expressions  
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Notes
 
-```js
-export default defineConfig([
-  globalIgnores(["dist"]),
-  {
-    files: ["**/*.{ts,tsx}"],
-    extends: [
-      // Other configs...
+- This is my first real dive into computer vision, so lots of beginner learning here 
+- Not a medical tool (duh)
+- Expect rough edges and bugs
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Screenshots
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-]);
-```
+![Face landmarks overlay](./public/images/readme-image-1.png)
+![Alert while tensing visiting another tab](./public/images/readme-image-2.png)
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from "eslint-plugin-react-x";
-import reactDom from "eslint-plugin-react-dom";
-
-export default defineConfig([
-  globalIgnores(["dist"]),
-  {
-    files: ["**/*.{ts,tsx}"],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs["recommended-typescript"],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-]);
-```
