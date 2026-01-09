@@ -18,10 +18,10 @@ export function useCamera(): UseCameraResult {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const videoEl = videoRef.current;
     let cancelled = false;
 
     async function initCamera() {
-      const videoEl = videoRef.current;
       if (!videoEl) return;
 
       try {
@@ -71,7 +71,7 @@ export function useCamera(): UseCameraResult {
       cancelled = true;
 
       // Stop camera stream on cleanup
-      const stream = videoRef.current?.srcObject;
+      const stream = videoEl?.srcObject;
       if (stream instanceof MediaStream) {
         for (const track of stream.getTracks()) track.stop();
       }

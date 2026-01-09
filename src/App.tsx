@@ -3,6 +3,16 @@ import { useCamera } from "./hooks/useCamera";
 import { useFaceLandmarker } from "./hooks/useFaceLandmarker";
 import { computeSignals, type Signals } from "./face/computeSignals";
 import { playRelaxChime } from "./utils/audio";
+import { StatusIndicator } from "./components/StatusIndicator";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { Switch } from "./components/ui/switch";
+import { Label } from "./components/ui/label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "./components/ui/tooltip";
 
 // Configuration constants
 const CALIBRATION_DURATION_MS = 10_000;
@@ -38,7 +48,7 @@ function App() {
   // Tension tracking
   const tensionStartTimeRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const [isAlertDisabled, setIsAlertDisabled] = useState(false);
+  const [isAlertEnabled, setIsAlertEnabled] = useState(true);
 
   // Live signals for UI display
   const [eyeOpenAvg, setEyeOpenAvg] = useState<number | null>(null);
@@ -153,7 +163,7 @@ function App() {
           now - tensionStartTimeRef.current >=
           TENSION_ALERT_THRESHOLD_MS
         ) {
-          if (!isAlertDisabled) {
+          if (isAlertEnabled) {
             triggerTensionAlert();
           }
           tensionStartTimeRef.current = null;
@@ -238,7 +248,7 @@ function App() {
         cancelAnimationFrame(rafIdRef.current);
       }
     };
-  }, [cameraStatus, videoRef, landmarkerRef, isAlertDisabled]);
+  }, [cameraStatus, videoRef, landmarkerRef, isAlertEnabled]);
 
   function startCalibration() {
     samplesRef.current = [];
@@ -267,66 +277,99 @@ function App() {
   }
 
   // Derive status message from hook states
-  function getStatusMessage(): string {
-    if (cameraError) return `Error: ${cameraError}`;
-    if (landmarkerError) return `Error: ${landmarkerError}`;
-    if (cameraStatus === "requesting") return "Requesting camera…";
-    if (landmarkerStatus === "loading") return "Loading Face Landmarker…";
+  function getStatus(): {
+    type: "error" | "loading" | "ready";
+    message: string;
+  } {
+    if (cameraError) return { type: "error", message: `Error: ${cameraError}` };
+    if (landmarkerError)
+      return { type: "error", message: `Error: ${landmarkerError}` };
+    if (cameraStatus === "requesting")
+      return { type: "loading", message: "Requesting camera…" };
+    if (landmarkerStatus === "loading")
+      return { type: "loading", message: "Loading Face Landmarker…" };
     if (cameraStatus === "ready" && landmarkerStatus === "ready")
-      return "Tracking";
-    return "Initializing…";
+      return { type: "ready", message: "Tracking" };
+    return { type: "loading", message: "Initializing…" };
   }
 
+  const status = getStatus();
   return (
-    <div className="flex flex-col items-center p-4 pt-16">
+    <div className="flex flex-col items-center p-4 pt-16 relative">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
       <h1 className="text-3xl font-bold mb-2">Face Tension Monitor</h1>
 
-      <p className="text-gray-400 mb-4">{getStatusMessage()}</p>
+      <StatusIndicator status={status} />
 
       <div className="mb-4 text-sm">
         <p>Eye openness: {eyeOpenAvg?.toFixed(4) ?? "—"}</p>
         <p>Brow inner distance: {browInnerDist?.toFixed(4) ?? "—"}</p>
       </div>
 
-      <div className="flex justify-center gap-2 mb-4">
-        <button
-          onClick={startCalibration}
-          disabled={isCalibrating}
-          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {isCalibrating
-            ? `Calibrating… ${calibrationSecondsLeft}`
-            : "Calibrate (10s)"}
-        </button>
-        <button
-          onClick={togglePictureInPicture}
-          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
-        >
-          {isPip ? "Exit Picture-in-Picture" : "Enable Picture-in-Picture"}
-        </button>
-      </div>
-      <div className="flex justify-center gap-2 mb-4">
-        <button
-          onClick={() => setIsAlertDisabled(!isAlertDisabled)}
-          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
-        >
-          {isAlertDisabled ? "Enable Alerts" : "Disable Alerts"}
-        </button>
-      </div>
-
-      <div className={`relative w-[640px] ${isPip ? "hidden" : "block"}`}>
-        <video
-          ref={videoRef}
-          width={640}
-          height={480}
-          playsInline
-          muted
-          className={`block ${isPip ? "" : "-scale-x-100"}`}
-        />
-        <canvas
-          ref={canvasRef}
-          className={`absolute left-0 top-0 pointer-events-none ${isPip ? "" : "-scale-x-100"}`}
-        />
+      <div className="w-[640px]">
+        <div className="flex justify-between items-center mb-2">
+          <button
+            onClick={startCalibration}
+            disabled={isCalibrating}
+            className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isCalibrating
+              ? `Calibrating… ${calibrationSecondsLeft}`
+              : "Calibrate (10s)"}
+          </button>
+          <div className="flex items-center gap-4">
+            {isPip ? (
+              <button
+                onClick={togglePictureInPicture}
+                className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+              >
+                Exit PiP
+              </button>
+            ) : (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger>
+                    <button
+                      onClick={togglePictureInPicture}
+                      className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                    >
+                      Enable PiP
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    Picture-in-Picture keeps the video feed visible in a
+                    floating window, allowing face tracking to continue even
+                    when you switch to other tabs or apps.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <div className="flex items-center gap-2">
+              <Switch
+                id="alerts"
+                checked={isAlertEnabled}
+                onCheckedChange={setIsAlertEnabled}
+              />
+              <Label htmlFor="alerts">Alerts</Label>
+            </div>
+          </div>
+        </div>
+        <div className={`relative ${isPip ? "hidden" : "block"}`}>
+          <video
+            ref={videoRef}
+            width={640}
+            height={480}
+            playsInline
+            muted
+            className={`block ${isPip ? "" : "-scale-x-100"}`}
+          />
+          <canvas
+            ref={canvasRef}
+            className={`absolute left-0 top-0 pointer-events-none ${isPip ? "" : "-scale-x-100"}`}
+          />
+        </div>
       </div>
     </div>
   );
