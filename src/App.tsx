@@ -13,6 +13,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./components/ui/tooltip";
+import { Button } from "./components/ui/button";
 
 // Configuration constants
 const CALIBRATION_DURATION_MS = 10_000;
@@ -310,7 +311,7 @@ function App() {
 
       <div className="w-[640px]">
         <div className="flex justify-between items-center mb-2">
-          <button
+          <Button
             onClick={startCalibration}
             disabled={isCalibrating}
             className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -318,25 +319,25 @@ function App() {
             {isCalibrating
               ? `Calibrating… ${calibrationSecondsLeft}`
               : "Calibrate (10s)"}
-          </button>
+          </Button>
           <div className="flex items-center gap-4">
             {isPip ? (
-              <button
+              <Button
                 onClick={togglePictureInPicture}
                 className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-colors"
               >
                 Exit PiP
-              </button>
+              </Button>
             ) : (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger>
-                    <button
+                    <Button
                       onClick={togglePictureInPicture}
                       className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-colors"
                     >
                       Enable PiP
-                    </button>
+                    </Button>
                   </TooltipTrigger>
                   <TooltipContent className="max-w-xs">
                     Picture-in-Picture keeps the video feed visible in a
