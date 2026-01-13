@@ -12,7 +12,22 @@ export const FACE_LM = {
   rightEyeTop: 386,
   rightEyeBottom: 374,
 
-  // brow furrow (candidates for inner brow corners)
+  // brow furrow
   leftInnerBrow: 107,
   rightInnerBrow: 336,
+
+  // mouth width (for detecting smiling)
+  leftMouthCorner: 61,
+  rightMouthCorner: 291,
+
+  // mouth vertical reference (upper lip center)
+  upperLipCenter: 13,
+
+  // under eye cheek area (for detecting cheek raise during smiles)
+  leftCheek: 50,
+  rightCheek: 280,
+
+  // nose tip (stable vertical reference)
+  noseTip: 1,
+  noseBridge: 6,
 } as const;

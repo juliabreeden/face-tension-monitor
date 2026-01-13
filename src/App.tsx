@@ -15,12 +15,18 @@ import {
 } from "./components/ui/tooltip";
 import { Button } from "./components/ui/button";
 
-// Configuration constants
+// Timing
 const CALIBRATION_DURATION_MS = 10_000;
 const TENSION_ALERT_THRESHOLD_MS = 3_000;
-const TENSION_THRESHOLD = 0.9; // 90% of neutral = tense
 const SAMPLE_INTERVAL_MS = 100;
 const UI_UPDATE_INTERVAL_MS = 100;
+
+// Detection thresholds (relative to calibrated neutral)
+const TENSION_THRESHOLD = 0.9;
+const SMILE_MOUTH_WIDTH_THRESHOLD = 1.05;
+const SMILE_CORNER_LIFT_THRESHOLD = 1.3;
+const SMILE_CHEEK_RAISE_THRESHOLD = 0.95;
+const HEAD_ROTATION_THRESHOLD = 0.5;
 
 function App() {
   // Custom hooks for camera and face detection
@@ -45,6 +51,7 @@ function App() {
   // Neutral baseline from calibration
   const neutralRef = useRef<Signals | null>(null);
   const hasCalibratedRef = useRef(false);
+  const [hasCalibrated, setHasCalibrated] = useState(false);
 
   // Tension tracking
   const tensionStartTimeRef = useRef<number | null>(null);
@@ -54,6 +61,10 @@ function App() {
   // Live signals for UI display
   const [eyeOpenAvg, setEyeOpenAvg] = useState<number | null>(null);
   const [browInnerDist, setBrowInnerDist] = useState<number | null>(null);
+  const [isSmiling, setIsSmiling] = useState(false);
+  const [smileScore, setSmileScore] = useState(0);
+  const [headRotation, setHeadRotation] = useState<number | null>(null);
+  const [isHeadTurned, setIsHeadTurned] = useState(false);
   const lastUiUpdateRef = useRef(0);
 
   // Picture-in-Picture state
@@ -122,7 +133,10 @@ function App() {
 
     function handleCalibrationSample(signals: Signals, now: number) {
       if (now - lastSampleTimeRef.current >= SAMPLE_INTERVAL_MS) {
-        samplesRef.current.push(signals);
+        // Only collect samples when facing forward (head not turned)
+        if (Math.abs(signals.headRotation) <= HEAD_ROTATION_THRESHOLD) {
+          samplesRef.current.push(signals);
+        }
         lastSampleTimeRef.current = now;
         setCalibrationSecondsLeft(
           Math.max(0, Math.ceil((calibrationEndTimeRef.current! - now) / 1000)),
@@ -141,21 +155,80 @@ function App() {
           samples.reduce((sum, s) => sum + s.eyeOpenAvg, 0) / samples.length;
         const browMean =
           samples.reduce((sum, s) => sum + s.browInnerDist, 0) / samples.length;
-
-        neutralRef.current = { eyeOpenAvg: eyeMean, browInnerDist: browMean };
+        const mouthMean =
+          samples.reduce((sum, s) => sum + s.mouthWidth, 0) / samples.length;
+        const cornerLiftMean =
+          samples.reduce((sum, s) => sum + s.mouthCornerLift, 0) /
+          samples.length;
+        const cheekRaiseMean =
+          samples.reduce((sum, s) => sum + s.cheekRaise, 0) / samples.length;
+        const headRotationMean =
+          samples.reduce((sum, s) => sum + s.headRotation, 0) / samples.length;
+        neutralRef.current = {
+          eyeOpenAvg: eyeMean,
+          browInnerDist: browMean,
+          mouthWidth: mouthMean,
+          mouthCornerLift: cornerLiftMean,
+          cheekRaise: cheekRaiseMean,
+          headRotation: headRotationMean,
+        };
         hasCalibratedRef.current = true;
+        setHasCalibrated(true);
       }
 
       samplesRef.current = [];
+    }
+
+    function detectSmile(
+      signals: Signals,
+      neutral: Signals,
+    ): { isSmiling: boolean; score: number } {
+      const mouthWidthRatio = signals.mouthWidth / neutral.mouthWidth;
+      const mouthWidthScore = Math.max(0, (mouthWidthRatio - 1) * 10);
+
+      const cornerLiftDelta = signals.mouthCornerLift - neutral.mouthCornerLift;
+      const cornerLiftScore = Math.max(0, cornerLiftDelta * 100);
+
+      const cheekRaiseRatio = signals.cheekRaise / neutral.cheekRaise;
+      const cheekRaiseScore = Math.max(0, (1 - cheekRaiseRatio) * 10);
+
+      const score =
+        mouthWidthScore * 0.4 + cornerLiftScore * 0.35 + cheekRaiseScore * 0.25;
+
+      // Require at least 2 of 3 indicators for robustness
+      const indicators = [
+        mouthWidthRatio > SMILE_MOUTH_WIDTH_THRESHOLD,
+        cornerLiftDelta >
+          (neutral.mouthCornerLift * (SMILE_CORNER_LIFT_THRESHOLD - 1) ||
+            0.002),
+        cheekRaiseRatio < SMILE_CHEEK_RAISE_THRESHOLD,
+      ];
+      const isSmiling = score > 0.3 || indicators.filter(Boolean).length >= 2;
+
+      return { isSmiling, score: Math.min(1, score) };
     }
 
     function checkTension(signals: Signals, now: number) {
       const neutral = neutralRef.current;
       if (!neutral) return;
 
+      const headTurned =
+        Math.abs(signals.headRotation) > HEAD_ROTATION_THRESHOLD;
+      if (headTurned) {
+        tensionStartTimeRef.current = null;
+        setIsSmiling(false);
+        setSmileScore(0);
+        return;
+      }
+
+      const { isSmiling: smiling, score } = detectSmile(signals, neutral);
+      setIsSmiling(smiling);
+      setSmileScore(score);
+
       const isTense =
-        signals.eyeOpenAvg < neutral.eyeOpenAvg * TENSION_THRESHOLD ||
-        signals.browInnerDist < neutral.browInnerDist * TENSION_THRESHOLD;
+        !smiling &&
+        (signals.eyeOpenAvg < neutral.eyeOpenAvg * TENSION_THRESHOLD ||
+          signals.browInnerDist < neutral.browInnerDist * TENSION_THRESHOLD);
 
       if (isTense) {
         if (tensionStartTimeRef.current === null) {
@@ -228,6 +301,10 @@ function App() {
           if (now - lastUiUpdateRef.current > UI_UPDATE_INTERVAL_MS) {
             setEyeOpenAvg(signals.eyeOpenAvg);
             setBrowInnerDist(signals.browInnerDist);
+            setHeadRotation(signals.headRotation);
+            setIsHeadTurned(
+              Math.abs(signals.headRotation) > HEAD_ROTATION_THRESHOLD,
+            );
             lastUiUpdateRef.current = now;
           }
 
@@ -256,6 +333,9 @@ function App() {
     lastSampleTimeRef.current = 0;
     neutralRef.current = null;
     hasCalibratedRef.current = false;
+    setHasCalibrated(false);
+    setIsSmiling(false);
+    setSmileScore(0);
 
     setIsCalibrating(true);
     isCalibrationRef.current = true;
@@ -307,6 +387,37 @@ function App() {
       <div className="mb-4 text-sm">
         <p>Eye openness: {eyeOpenAvg?.toFixed(4) ?? "—"}</p>
         <p>Brow inner distance: {browInnerDist?.toFixed(4) ?? "—"}</p>
+        <p>
+          Head rotation:{" "}
+          {headRotation !== null ? (
+            <span
+              className={
+                isHeadTurned ? "text-amber-600 dark:text-amber-400" : ""
+              }
+            >
+              {(headRotation * 100).toFixed(0)}%
+            </span>
+          ) : (
+            "—"
+          )}
+        </p>
+        {hasCalibrated && (
+          <p
+            className={
+              isHeadTurned
+                ? "text-amber-600 dark:text-amber-400"
+                : isSmiling
+                  ? "text-green-600 dark:text-green-400 font-medium"
+                  : ""
+            }
+          >
+            {isHeadTurned
+              ? "🔄 Head turned – detection paused"
+              : isSmiling
+                ? `😊 Smiling (${(smileScore * 100).toFixed(0)}%) – no tension alert`
+                : "😐 Neutral"}
+          </p>
+        )}
       </div>
 
       <div className="w-[640px]">

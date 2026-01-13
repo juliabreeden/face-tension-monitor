@@ -9,6 +9,10 @@ import { FACE_LM } from "./indices";
 export type Signals = {
   eyeOpenAvg: number; // average of left and right eye openness, higher when eyes are open
   browInnerDist: number; // smaller when furrowing, larger when relaxing
+  mouthWidth: number; // larger when smiling, smaller when relaxing
+  mouthCornerLift: number; // higher when smiling (corners lift relative to center)
+  cheekRaise: number; // smaller when smiling (cheeks push up toward eyes)
+  headRotation: number; // -1 to 1, 0 = forward
 };
 
 export function computeSignals(landmarks: Landmark[]): Signals | null {
@@ -33,8 +37,44 @@ export function computeSignals(landmarks: Landmark[]): Signals | null {
       landmarks[FACE_LM.rightInnerBrow],
     ) / faceWidth;
 
+  const mouthWidth =
+    dist2D(
+      landmarks[FACE_LM.leftMouthCorner],
+      landmarks[FACE_LM.rightMouthCorner],
+    ) / faceWidth;
+
+  // Mouth corner lift relative to upper lip
+  const upperLipY = landmarks[FACE_LM.upperLipCenter].y;
+  const leftCornerLift = upperLipY - landmarks[FACE_LM.leftMouthCorner].y;
+  const rightCornerLift = upperLipY - landmarks[FACE_LM.rightMouthCorner].y;
+  const mouthCornerLift = (leftCornerLift + rightCornerLift) / 2 / faceWidth;
+
+  // Cheek raise (decreases when smiling)
+  const leftCheekDist = dist2D(
+    landmarks[FACE_LM.leftMouthCorner],
+    landmarks[FACE_LM.leftCheek],
+  );
+  const rightCheekDist = dist2D(
+    landmarks[FACE_LM.rightMouthCorner],
+    landmarks[FACE_LM.rightCheek],
+  );
+  const cheekRaise = (leftCheekDist + rightCheekDist) / 2 / faceWidth;
+
+  // Head rotation from face asymmetry (nose position relative to face edges)
+  const noseBridge = landmarks[FACE_LM.noseBridge];
+  const noseToLeft = Math.abs(noseBridge.x - landmarks[FACE_LM.leftFaceEdge].x);
+  const noseToRight = Math.abs(
+    landmarks[FACE_LM.rightFaceEdge].x - noseBridge.x,
+  );
+  const asymmetryRatio = noseToRight > 0 ? noseToLeft / noseToRight : 1;
+  const headRotation = (asymmetryRatio - 1) / (asymmetryRatio + 1);
+
   return {
     eyeOpenAvg: (leftEyeOpen + rightEyeOpen) / 2,
     browInnerDist,
+    mouthWidth,
+    mouthCornerLift,
+    cheekRaise,
+    headRotation,
   };
 }
